@@ -1,0 +1,35 @@
+﻿exclusion_word,action
+repealed,exclude
+revoked,exclude
+"""Salmon Arm""",exclude
+"""Little River""",exclude
+"""Yukon Territory""",exclude
+rockfish,exclude
+eulachon,exclude
+smelt,exclude
+crab,exclude
+shrimp,exclude
+octopus,exclude
+"""Salmon River""",exclude
+Morne,exclude
+Breton,exclude
+Newfoundland,exclude
+Atlantic,exclude
+fund,exclude
+Manitoba,exclude
+Ontario,exclude
+Brunswick,exclude
+Alberta,exclude
+Saskatchewan,exclude
+Quebec,exclude
+Scotia,exclude
+tree,exclude
+fund,exclude
+board,exclude
+whereas,exclude
+excellency,exclude
+Yoho,exclude
+thence,exclude
+waterton,exclude
+liability,exclude
+"""His Excellency""",exclude

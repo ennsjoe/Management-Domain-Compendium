@@ -22,7 +22,7 @@ library(dplyr)
 
 # Define file paths
 html_folder_path <- "C:/Users/ennsj/DFO-MPO/Salmon Science Strategy - working group - working group/5-Reporting/Management Domains/Interactive Tool/R Code/Keyword Mapping/Type 1 Legislation"
-output_csv_path <- "C:/Users/ennsj/DFO-MPO/Salmon Science Strategy - working group - working group/5-Reporting/Management Domains/Interactive Tool/R Code/Keyword Mapping/Keyword_Mapping_Results.csv"
+output_csv_path <- "C:/Users/ennsj/DFO-MPO/Salmon Science Strategy - working group - working group/5-Reporting/Management Domains/Interactive Tool/R Code/Keyword Mapping/Type_1_Procedural_Elements.csv"
 
 # Define keywords
 keywords <- c("salmon", "chinook", "coho", "sockeye", "chum")
@@ -38,16 +38,41 @@ for (html_file_path in html_files) {
   html_file <- tryCatch(read_html(html_file_path), error = function(e) NULL)
   if (is.null(html_file)) next  # Skip problematic files
   
-  # Extract legislation name from <h1 class="main-title solexHlZone mt-0">
+  # Extract legislation name from <h1 class="main-title">
   legislation_name <- html_file %>% html_node("h1.main-title") %>% html_text(trim = TRUE) %>% iconv(from = "UTF-8", to = "ASCII//TRANSLIT")
+  
+  # If missing, extract from <div id="title">
+  if (is.na(legislation_name) || legislation_name == "") {
+    title_main <- html_file %>% html_node("div#title h2") %>% html_text(trim = TRUE) %>% iconv(from = "UTF-8", to = "ASCII//TRANSLIT")
+    title_chapter <- html_file %>% html_node("div#title h3") %>% html_text(trim = TRUE) %>% iconv(from = "UTF-8", to = "ASCII//TRANSLIT")
+    
+    # Combine title and chapter if available
+    if (!is.na(title_main) && nzchar(title_main)) {
+      legislation_name <- title_main
+      if (!is.na(title_chapter) && nzchar(title_chapter)) {
+        legislation_name <- paste(title_main, title_chapter, sep = " - ")
+      }
+    }
+  }
+  
+  # Ensure a fallback value
   legislation_name <- ifelse(is.na(legislation_name) || legislation_name == "", "Unknown Legislation", legislation_name)
   
-  # Extract act name from statutes section
+  # Determine Legislation Type based on keywords in Legislation Name
+  if (grepl("Act", legislation_name, ignore.case = TRUE)) {
+    legislation_type <- "Act"
+  } else if (grepl("Regulation", legislation_name, ignore.case = TRUE)) {
+    legislation_type <- "Regulations"
+  } else {
+    legislation_type <- "Unknown Type"
+  }
+  
+  # Extract act name
   act_name <- html_file %>% html_node("section#statutesTab a") %>% html_text(trim = TRUE) %>% iconv(from = "UTF-8", to = "ASCII//TRANSLIT")
   act_name <- gsub(",.*$", "", act_name)  # Clean formatting
   act_name <- ifelse(is.na(act_name) || act_name == "", "Unknown Act", act_name)
   
-  # Extract paragraph nodes (including list-based sections)
+  # Extract paragraph nodes
   p_nodes <- html_file %>% html_nodes("p, li, div.paragWrapper")
   
   # Initialize vectors for storing data
@@ -62,27 +87,19 @@ for (html_file_path in html_files) {
     # Check if paragraph contains any of the keywords
     if (any(grepl(paste(keywords, collapse = "|"), paragraph_content, ignore.case = TRUE))) {
       
-      # Extract section number from various structures
+      # Extract section number (removing subsection numbers)
       secnum <- p %>% html_node("span.canlii_section") %>% html_text(trim = TRUE)
       if (is.na(secnum) || secnum == "") secnum <- p %>% html_node("a.sectionLabel span") %>% html_text(trim = TRUE)
       if (is.na(secnum) || secnum == "") secnum <- p %>% html_node("span.sectionLabel") %>% html_text(trim = TRUE)
-      if (is.na(secnum) || secnum == "") secnum <- p %>% html_node("div.paragWrapper span.canlii_section") %>% html_text(trim = TRUE)
-      if (is.na(secnum) || secnum == "") secnum <- p %>% html_node("ul.Section li div.paragWrapper span.canlii_section") %>% html_text(trim = TRUE)
-      if (is.na(secnum) || secnum == "") secnum <- p %>% html_node("li strong a.sectionLabel span.canlii_section") %>% html_text(trim = TRUE)
       
-      # Extract subsection number (if present)
-      subsecnum <- p %>% html_node("span.lawlabel") %>% html_text(trim = TRUE)
-      
-      # Ensure section number exists before combining with subsection
-      if (!is.na(secnum) && nzchar(secnum) && !is.na(subsecnum) && nzchar(subsecnum)) {
-        secnum <- paste(secnum, subsecnum, sep = "")
-      }
+      # Remove subsection numbers (keeps only the main section)
+      secnum <- gsub("\\..*$", "", secnum)
       
       # Preserve last known section number
       secnum <- ifelse(is.na(secnum) || secnum == "", last_secnum, secnum)
       last_secnum <- secnum  # Update last known section number
       
-      # Extract closest preceding heading (h1-h5)
+      # Extract closest preceding heading
       heading_tags <- c("h5", "h4", "h3", "h2", "h1")
       heading <- ""
       for (tag in heading_tags) {
@@ -104,6 +121,7 @@ for (html_file_path in html_files) {
   if (length(paragraphs) > 0) {
     compiled_list[[legislation_name]] <- data.table(
       `Legislation Name` = legislation_name,
+      `Legislation Type` = legislation_type,  # ✅ Restored and automated column
       `Act Name` = act_name,
       `Heading` = headings,
       `Section` = secnums,
@@ -113,10 +131,13 @@ for (html_file_path in html_files) {
   }
 }
 
-# Combine all data into one table
-compiled_df <- rbindlist(compiled_list, use.names = TRUE, fill = TRUE)
+# Combine all data into one table and remove duplicates per legislation and section
+compiled_df <- rbindlist(compiled_list, use.names = TRUE, fill = TRUE) %>%
+  group_by(`Legislation Name`, `Section`) %>%
+  distinct(Paragraph, .keep_all = TRUE) %>%
+  ungroup()
 
-# **Remove rows where paragraph contains "repealed" or "revoke" (case-insensitive)**
+# Remove rows where paragraph contains "repealed" or "revoke"
 compiled_df <- compiled_df %>% filter(!grepl("repealed|revoke", Paragraph, ignore.case = TRUE))
 
 # Export data to CSV
@@ -126,7 +147,7 @@ fwrite(compiled_df, output_csv_path, row.names = FALSE)
 print(paste("CSV file saved to:", output_csv_path))
 
 #==========================================================
-# Type 2 Bigrams and Trigrams
+# Word Frequency
 #==========================================================
 
 # Load required libraries
@@ -136,164 +157,211 @@ library(stringr)
 library(udpipe)
 
 # Define file paths
-input_csv_path <- "C:/Users/ennsj/DFO-MPO/Salmon Science Strategy - working group - working group/5-Reporting/Management Domains/Interactive Tool/R Code/Keyword Mapping/Keyword_Mapping_Results.csv"
-output_csv_path <- "C:/Users/ennsj/DFO-MPO/Salmon Science Strategy - working group - working group/5-Reporting/Management Domains/Interactive Tool/R Code/Keyword Mapping/n_grams_results.csv"
 udpipe_model_path <- "C:/Users/ennsj/DFO-MPO/Salmon Science Strategy - working group - working group/5-Reporting/Management Domains/Interactive Tool/R Code/Keyword Mapping/english-ewt-ud-2.5-191206.udpipe"
 
-# Define exclusion keywords
-excluded_words <- c("salmon", "chinook", "coho", "sockeye", "chum", "act", "regulation")
-
-# Validate file existence
-if (!file.exists(input_csv_path)) stop("Error: CSV file not found at specified path.")
-if (!file.exists(udpipe_model_path)) stop("Error: UDPipe model file not found.")
-
-# Load dataset
-keyword_df <- tryCatch(fread(input_csv_path), error = function(e) stop("Error loading dataset:", e))
-
-# Extract relevant text columns (Paragraphs & Headings)
-text_data <- keyword_df %>%
-  select(Paragraph, Heading) %>%
-  gather(key = "source", value = "text", Paragraph, Heading) %>%
-  filter(!is.na(text))
-
-# Load UDPipe model
+# Load the Udpipe model
 ud_model <- udpipe_load_model(udpipe_model_path)
 
-# Perform POS tagging with UDPipe
-annotated_text <- udpipe_annotate(ud_model, x = text_data$text)
-df_tokens <- as.data.frame(annotated_text)
+# Ensure Legislation Name is properly associated with each paragraph
+compiled_df <- compiled_df %>% mutate(doc_id = as.character(row_number()))  # Use character to ensure proper passing
 
-# Function to clean unwanted characters
-clean_text <- function(text) {
-  text <- str_replace_all(text, "[^a-zA-Z\\s]", "")  # Removes non-alphabetic characters
-  text <- str_trim(text)  # Removes extra spaces
-  text <- paste0("\"", text, "\"")  # Wraps in double quotes
-  return(text)
+# Perform annotation and manually retain doc_id
+annotated_data <- udpipe_annotate(ud_model, x = compiled_df$Paragraph, doc_id = compiled_df$doc_id) %>%
+  as.data.table()
+
+# Ensure doc_id maps correctly
+annotated_data <- annotated_data %>%
+  left_join(compiled_df %>% select(doc_id, `Legislation Name`), by = "doc_id")
+
+# List of words to exclude
+exclude_words <- c("salmon", "sockeye", "chinook", "coho", "chum", "pink")
+
+# Clean text: Remove numbers, blanks, and special characters
+clean_lemma <- function(word) {
+  word <- str_replace_all(word, "[^a-zA-Z]", "")  # Remove non-alphabetic characters
+  word <- tolower(word)  # Convert to lowercase for consistency
+  return(word)
 }
 
-# Extract Bigrams (noun/noun, noun/verb, noun/adjective, EXCLUDING duplicates & unwanted words)
-bigrams <- df_tokens %>%
-  mutate(next_word = lead(token), next_pos = lead(upos)) %>%
-  filter(upos == "NOUN" & next_pos %in% c("NOUN", "VERB", "ADJ") & token != next_word) %>%
-  mutate(ngram = clean_text(paste(token, next_word))) %>%
-  filter(!grepl(paste(excluded_words, collapse = "|"), ngram, ignore.case = TRUE))  # Exclude keywords & terms
+# Apply cleaning function
+annotated_data$lemma <- sapply(annotated_data$lemma, clean_lemma)
 
-# Extract Trigrams (first & last words must be nouns or verbs, middle word can be any type, EXCLUDING duplicates & unwanted words)
-trigrams <- df_tokens %>%
-  mutate(next_word1 = lead(token), next_pos1 = lead(upos),
-         next_word2 = lead(token, 2), next_pos2 = lead(upos, 2)) %>%
-  filter((upos %in% c("NOUN", "VERB") & next_pos2 %in% c("NOUN", "VERB")) &
-           (token != next_word1 & token != next_word2 & next_word1 != next_word2)) %>%
-  mutate(ngram = clean_text(paste(token, next_word1, next_word2))) %>%
-  filter(!grepl(paste(excluded_words, collapse = "|"), ngram, ignore.case = TRUE))  # Exclude keywords & terms
+# Remove words that are empty after cleaning
+annotated_data <- annotated_data %>% filter(lemma != "")
 
-# Combine bigrams and trigrams
-ngrams_df <- bind_rows(
-  bigrams %>% select(ngram),
-  trigrams %>% select(ngram)
-)
+# Remove words that are only one letter long
+annotated_data <- annotated_data %>% filter(nchar(lemma) > 1)
 
-# Count the frequency of each n-gram
-ngrams_df <- ngrams_df %>% group_by(ngram) %>% summarise(frequency = n(), .groups = "drop")
+# Filter for nouns, verbs, and adjectives and exclude unwanted words
+filtered_data <- annotated_data %>%
+  filter(upos %in% c("NOUN", "VERB", "ADJ")) %>%
+  filter(!lemma %in% exclude_words)
 
-# Ensure proper column naming for export
-setnames(ngrams_df, c("ngram", "frequency"))
+# **Generate the initial word frequency table**
+word_freq <- filtered_data %>%
+  group_by(`Legislation Name`, lemma) %>%
+  summarise(freq = n(), .groups = "drop") %>%
+  arrange(`Legislation Name`, desc(freq))
 
-# Export results to CSV
-fwrite(ngrams_df, output_csv_path, row.names = FALSE)
+# **Now remove words that only occur once in the word frequency table**
+word_freq_filtered <- word_freq %>%
+  group_by(lemma) %>%
+  mutate(total_freq = sum(freq)) %>%  # Compute total occurrences across legislation
+  ungroup() %>%
+  filter(total_freq > 1) %>%  # Remove words appearing only once globally
+  select(-total_freq)  # Remove helper column
+
+# Export word frequency data to CSV
+output_word_freq_path <- "C:/Users/ennsj/DFO-MPO/Salmon Science Strategy - working group - working group/5-Reporting/Management Domains/Interactive Tool/R Code/Keyword Mapping/word_frequency_final_fixed.csv"
+fwrite(word_freq_filtered, output_word_freq_path, row.names = FALSE)
 
 # Print confirmation
-print(paste("N-grams CSV saved to:", output_csv_path))
+print(paste("Final cleaned word frequency analysis (removing single-occurrence words at the end) saved to:", output_word_freq_path))
 
-#============================================================
-# Cross-filtering Bigrams and trigrams
-#============================================================
+#=================================================
 
 # Load required libraries
 library(data.table)
 library(dplyr)
-library(stringr)
-library(udpipe)
 
 # Define file paths
-input_csv_path <- "C:/Users/ennsj/DFO-MPO/Salmon Science Strategy - working group - working group/5-Reporting/Management Domains/Interactive Tool/R Code/Keyword Mapping/Keyword_Mapping_Results.csv"
-output_csv_path <- "C:/Users/ennsj/DFO-MPO/Salmon Science Strategy - working group - working group/5-Reporting/Management Domains/Interactive Tool/R Code/Keyword Mapping/Common_n_grams.csv"
-udpipe_model_path <- "C:/Users/ennsj/DFO-MPO/Salmon Science Strategy - working group - working group/5-Reporting/Management Domains/Interactive Tool/R Code/Keyword Mapping/english-ewt-ud-2.5-191206.udpipe"
+input_csv_path <- "C:/Users/ennsj/DFO-MPO/Salmon Science Strategy - working group - working group/5-Reporting/Management Domains/Interactive Tool/R Code/Keyword Mapping/word_frequency_final_fixed.csv"
+output_csv_path <- "C:/Users/ennsj/DFO-MPO/Salmon Science Strategy - working group - working group/5-Reporting/Management Domains/Interactive Tool/R Code/Keyword Mapping/word_frequency_summary.csv"
 
-# Define exclusion keywords
-excluded_words <- c("salmon", "chinook", "coho", "sockeye", "chum", "act", "regulation")
+# Read in the CSV file
+word_data <- fread(input_csv_path)
 
-# Validate file existence
-if (!file.exists(input_csv_path)) stop("Error: CSV file not found at specified path.")
-if (!file.exists(udpipe_model_path)) stop("Error: UDPipe model file not found.")
-
-# Load dataset
-keyword_df <- tryCatch(fread(input_csv_path), error = function(e) stop("Error loading dataset:", e))
-
-# Extract relevant text columns (Grouped by Legislation Name)
-text_data <- keyword_df %>%
-  select(`Legislation Name`, Paragraph, Heading) %>%
-  gather(key = "source", value = "text", Paragraph, Heading) %>%
-  filter(!is.na(text))
-
-# Load UDPipe model
-ud_model <- udpipe_load_model(udpipe_model_path)
-
-# Perform POS tagging with UDPipe
-annotated_text <- udpipe_annotate(ud_model, x = text_data$text)
-df_tokens <- as.data.frame(annotated_text)
-
-# Function to clean unwanted characters
-clean_text <- function(text) {
-  text <- str_replace_all(text, "[^a-zA-Z\\s]", "")  # Removes non-alphabetic characters
-  text <- str_trim(text)  # Removes extra spaces
-  text <- paste0("\"", text, "\"")  # Wraps in double quotes
-  return(text)
+# Ensure 'lemma' column exists
+if (!"lemma" %in% colnames(word_data)) {
+  stop("Error: 'lemma' column not found in the dataset.")
 }
 
-# Extract Bigrams (EXCLUDING unwanted words and one-letter words)
-bigrams <- df_tokens %>%
-  mutate(next_word = lead(token), next_pos = lead(upos)) %>%
-  filter(upos == "NOUN" & next_pos %in% c("NOUN", "VERB", "ADJ") & 
-           token != next_word & !str_detect(token, "^.$") & !str_detect(next_word, "^.$")) %>%
-  mutate(ngram = clean_text(paste(token, next_word))) %>%
-  filter(!grepl(paste(excluded_words, collapse = "|"), ngram, ignore.case = TRUE))
+# Perform word frequency analysis
+word_freq <- word_data %>%
+  count(lemma, name = "freq") %>%
+  arrange(desc(freq))
 
-# Extract Trigrams (EXCLUDING unwanted words and one-letter words)
-trigrams <- df_tokens %>%
-  mutate(next_word1 = lead(token), next_pos1 = lead(upos),
-         next_word2 = lead(token, 2), next_pos2 = lead(upos, 2)) %>%
-  filter((upos %in% c("NOUN", "VERB") & next_pos2 %in% c("NOUN", "VERB")) &
-           (token != next_word1 & token != next_word2 & next_word1 != next_word2) & 
-           !str_detect(token, "^.$") & !str_detect(next_word1, "^.$") & !str_detect(next_word2, "^.$")) %>%
-  mutate(ngram = clean_text(paste(token, next_word1, next_word2))) %>%
-  filter(!grepl(paste(excluded_words, collapse = "|"), ngram, ignore.case = TRUE))
-
-# Combine bigrams and trigrams
-ngrams_df <- bind_rows(
-  bigrams %>% select(ngram),
-  trigrams %>% select(ngram)
-)
-
-# Merge n-grams with legislation name
-ngrams_df <- left_join(ngrams_df, text_data %>% select(`Legislation Name`) %>% distinct(), by = character())
-
-# Count occurrences **across different legislation names**
-ngram_counts <- ngrams_df %>%
-  group_by(ngram, `Legislation Name`) %>%
-  summarise(count = n(), .groups = "drop") %>%
-  group_by(ngram) %>%
-  summarise(legislation_count = n_distinct(`Legislation Name`), .groups = "drop")
-
-# **Step 3:** Only keep n-grams that match across multiple legislation names
-matching_ngrams <- ngram_counts %>%
-  filter(legislation_count > 1)  # Keep only n-grams present in more than one `Legislation Name`
-
-# **Step 4:** Convert to dataframe for export
-matching_ngrams_df <- data.frame(ngram = matching_ngrams$ngram)
-
-# Export results to CSV
-fwrite(matching_ngrams_df, output_csv_path, row.names = FALSE)
+# Export word frequency data to a new CSV file
+fwrite(word_freq, output_csv_path, row.names = FALSE)
 
 # Print confirmation
-print(paste("Matched Bigrams & Trigrams CSV saved to:", output_csv_path))
+print(paste("Word frequency summary saved to:", output_csv_path))
+
+#===================================================
+
+# Load required libraries
+library(data.table)
+library(dplyr)
+
+# Define file paths
+input_csv_path <- "C:/Users/ennsj/DFO-MPO/Salmon Science Strategy - working group - working group/5-Reporting/Management Domains/Interactive Tool/R Code/Keyword Mapping/word_frequency_summary.csv"
+output_csv_path <- "C:/Users/ennsj/DFO-MPO/Salmon Science Strategy - working group - working group/5-Reporting/Management Domains/Interactive Tool/R Code/Keyword Mapping/Type_1_unigrams.csv"
+
+# Read in the word frequency CSV file
+word_data <- fread(input_csv_path)
+
+# Ensure 'freq' column exists
+if (!"freq" %in% colnames(word_data)) {
+  stop("Error: 'freq' column not found in the dataset.")
+}
+
+# Remove words that appear only once
+word_data_filtered <- word_data %>%
+  filter(freq > 1)
+
+# Export filtered word frequency data to a new CSV file
+fwrite(word_data_filtered, output_csv_path, row.names = FALSE)
+
+# Print confirmation
+print(paste("Filtered word frequency analysis saved to:", output_csv_path))
+
+#========================================================================
+# Bigrams
+#=======================================================================
+
+library(udpipe)
+library(dplyr)
+library(data.table)
+library(stringr)
+
+# Load the UDPipe model
+ud_model <- udpipe_load_model("C:/Users/ennsj/DFO-MPO/Salmon Science Strategy - working group - working group/5-Reporting/Management Domains/Interactive Tool/R Code/Keyword Mapping/english-ewt-ud-2.5-191206.udpipe")
+
+# Ensure Legislation Name is properly associated with each paragraph
+compiled_df <- compiled_df %>% mutate(doc_id = as.character(row_number()))  # Use character to ensure proper passing
+
+# Perform annotation and manually retain doc_id
+annotated_data <- udpipe_annotate(ud_model, x = compiled_df$Paragraph, doc_id = compiled_df$doc_id) %>%
+  as.data.table()
+
+# Ensure doc_id maps correctly
+annotated_data <- annotated_data %>%
+  left_join(compiled_df %>% select(doc_id, `Legislation Name`), by = "doc_id")
+
+# Ensure token ID column is numeric
+annotated_data <- annotated_data %>%
+  mutate(token_id = as.numeric(token_id))
+
+# Create bigrams from consecutive tokens, now properly linked to Legislation Name
+bigrams_pos <- annotated_data %>%
+  select(doc_id, sentence_id, token_id, lemma, upos, `Legislation Name`) %>%
+  mutate(next_token_id = token_id + 1) %>%
+  inner_join(annotated_data, by = c("doc_id", "sentence_id", "next_token_id" = "token_id"), suffix = c("_1", "_2")) %>%
+  transmute(Legislation_Name = `Legislation Name_1`, 
+            bigram = paste(lemma_1, lemma_2, sep = " "), 
+            pos_1 = upos_1, pos_2 = upos_2) %>%
+  filter((pos_1 == "NOUN" & pos_2 == "NOUN") |
+           (pos_1 == "VERB" & pos_2 == "NOUN") |
+           (pos_1 == "VERB" & pos_2 == "VERB") |
+           (pos_1 == "ADJ"  & pos_2 == "VERB")) %>%
+  count(Legislation_Name, bigram, sort = TRUE)
+
+# Define words to remove
+exclude_words <- c("salmon", "chinook", "sockeye", "coho", "chum", "pink")
+
+# Filter out bigrams containing excluded words
+filtered_bigrams <- bigrams_pos %>%
+  filter(!str_detect(bigram, paste(exclude_words, collapse = "|")))
+
+# Remove numbers and special characters but preserve spaces
+filtered_bigrams$bigram <- gsub("[^a-zA-Z ]", "", filtered_bigrams$bigram)
+
+# Remove one-letter words
+filtered_bigrams <- filtered_bigrams %>%
+  filter(!sapply(str_split(bigram, " "), function(x) any(nchar(x) == 1)))
+
+# Define output file path
+grouped_bigram_csv_path <- "C:/Users/ennsj/DFO-MPO/Salmon Science Strategy - working group - working group/5-Reporting/Management Domains/Interactive Tool/R Code/Keyword Mapping/Grouped_Bigram_Frequency.csv"
+
+# Export grouped bigram data to CSV
+fwrite(filtered_bigrams, grouped_bigram_csv_path, row.names = FALSE)
+
+# Print confirmation message
+print(paste("Grouped bigram frequency CSV saved to:", grouped_bigram_csv_path))
+
+#====================================================================================
+
+library(data.table)
+library(dplyr)
+
+# Define input file path
+input_csv_path <- "C:/Users/ennsj/DFO-MPO/Salmon Science Strategy - working group - working group/5-Reporting/Management Domains/Interactive Tool/R Code/Keyword Mapping/Grouped_Bigram_Frequency.csv"
+
+# Define output file path
+filtered_bigram_csv_path <- "C:/Users/ennsj/DFO-MPO/Salmon Science Strategy - working group - working group/5-Reporting/Management Domains/Interactive Tool/R Code/Keyword Mapping/Type_1_bigrams.csv"
+
+# Read the CSV file
+bigram_data <- fread(input_csv_path)
+
+# Count occurrences of each bigram phrase and filter out phrases occurring only once
+bigram_counts <- bigram_data %>%
+  group_by(bigram) %>%
+  summarise(frequency = sum(n, na.rm = TRUE)) %>%
+  filter(frequency > 1) %>%
+  arrange(desc(frequency))
+
+# Export the filtered bigram phrase frequency data to CSV
+fwrite(bigram_counts, filtered_bigram_csv_path, row.names = FALSE)
+
+# Print confirmation message
+print(paste("Filtered bigram phrase frequency CSV saved to:", filtered_bigram_csv_path))

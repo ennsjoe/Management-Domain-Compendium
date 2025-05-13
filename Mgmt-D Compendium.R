@@ -544,7 +544,7 @@ type2_3_df <- fread(type2_3_csv_path)
 exclusion_df <- fread(exclusion_csv_path)
 
 # Standardize column names to ensure proper merging
-common_cols <- c("Legislation Name", "Legislation Type", "Act Name", "Section", "Paragraph", "Relevancy Type", "L1", "L2", "Clause Type")
+common_cols <- c("Legislation Name", "Legislation Type", "Act Name", "Section", "Paragraph", "Relevancy Type", "L1", "L2", "Clause Type", "Heading")  # Added "Heading" column
 
 # Ensure both datasets have the same columns before merging
 for (col in common_cols) {

@@ -49,7 +49,11 @@ for (html_file_path in html_files) {
   legislation_name <- ifelse(is.na(legislation_name) || legislation_name == "", "Unknown Legislation", legislation_name)
   
   # Determine Legislation Type based on keywords in Legislation Name
-  if (grepl("Act", legislation_name, ignore.case = TRUE)) {
+  if (grepl("Act", legislation_name, ignore.case = TRUE) && grepl("Regulations", legislation_name, ignore.case = TRUE)) {
+    legislation_type <- "Regulations"
+  } else if (grepl("Order", legislation_name, ignore.case = TRUE)) {
+    legislation_type <- "Order"
+  } else if (grepl("Act", legislation_name, ignore.case = TRUE)) {
     legislation_type <- "Act"
   } else if (grepl("Regulation", legislation_name, ignore.case = TRUE)) {
     legislation_type <- "Regulations"
@@ -57,10 +61,10 @@ for (html_file_path in html_files) {
     legislation_type <- "Unknown Type"
   }
   
-  # Extract act name
+  # Extract act name, fallback to legislation name if unavailable
   act_name <- html_file %>% html_node("section#statutesTab a") %>% html_text(trim = TRUE) %>% iconv(from = "UTF-8", to = "ASCII//TRANSLIT")
   act_name <- gsub(",.*$", "", act_name)  # Clean formatting
-  act_name <- ifelse(is.na(act_name) || act_name == "", "Unknown Act", act_name)
+  act_name <- ifelse(is.na(act_name) || act_name == "", legislation_name, act_name)
   
   # Extract paragraph nodes
   p_nodes <- html_file %>% html_nodes("p, li, div.paragWrapper")
@@ -70,6 +74,7 @@ for (html_file_path in html_files) {
   
   # Track last known section number
   last_secnum <- ""
+  last_part_or_title <- ""
   
   for (p in p_nodes) {
     paragraph_content <- p %>% html_text(trim = TRUE) %>% iconv(from = "UTF-8", to = "ASCII//TRANSLIT")
@@ -82,6 +87,11 @@ for (html_file_path in html_files) {
       if (is.na(secnum) || secnum == "") secnum <- p %>% html_node("a.sectionLabel span") %>% html_text(trim = TRUE)
       if (is.na(secnum) || secnum == "") secnum <- p %>% html_node("span.sectionLabel") %>% html_text(trim = TRUE)
       
+      # Also check for section numbers inside list items
+      if (is.na(secnum) || secnum == "") {
+        secnum <- p %>% html_node("ul.Section.ProvisionList li p.Subsection strong a.sectionLabel span") %>% html_text(trim = TRUE)
+      }
+      
       # Remove subsection numbers (keeps only the main section)
       secnum <- gsub("\\..*$", "", secnum)
       
@@ -89,12 +99,22 @@ for (html_file_path in html_files) {
       secnum <- ifelse(is.na(secnum) || secnum == "", last_secnum, secnum)
       last_secnum <- secnum  # Update last known section number
       
-      # Extract closest preceding heading
-      heading_tags <- c("h5", "h4", "h3", "h2", "h1")
+      # Extract closest preceding heading, including marginal notes
+      heading_tags <- c("h5", "h4", "h3", "h2", "h1", "p.MarginalNote")
       heading <- ""
       for (tag in heading_tags) {
         heading <- p %>% html_node(xpath = paste0("preceding::", tag, "[1]")) %>% html_text(trim = TRUE) %>% iconv(from = "UTF-8", to = "ASCII//TRANSLIT")
-        if (!is.na(heading) && nzchar(heading)) break
+        if (!is.na(heading) && nzchar(heading)) {
+          heading <- gsub("^Marginal note:\\s*", "", heading)  # Remove "Marginal note:"
+          break
+        }
+      }
+      
+      # If no heading exists, extract the nearest preceding part or title
+      if (is.na(heading) || heading == "") {
+        heading <- p %>% html_node("h2.Part span.HTitleText1") %>% html_text(trim = TRUE) %>% iconv(from = "UTF-8", to = "ASCII//TRANSLIT")
+        heading <- ifelse(is.na(heading) || heading == "", last_part_or_title, heading)
+        last_part_or_title <- heading  # Update last known part or title
       }
       
       # Assign relevancy type
@@ -126,9 +146,6 @@ compiled_df <- rbindlist(compiled_list, use.names = TRUE, fill = TRUE) %>%
   group_by(`Legislation Name`, `Section`) %>%
   distinct(Paragraph, .keep_all = TRUE) %>%
   ungroup()
-
-# Remove rows where paragraph contains "repealed" or "revoke"
-compiled_df <- compiled_df %>% filter(!grepl("repealed|revoke", Paragraph, ignore.case = TRUE))
 
 # Export data to CSV
 fwrite(compiled_df, output_csv_path, row.names = FALSE)
@@ -325,8 +342,12 @@ for (html_file_path in html_files) {
   # Ensure a fallback value
   legislation_name <- ifelse(is.na(legislation_name) || legislation_name == "", "Unknown Legislation", legislation_name)
   
-  # Determine Legislation Type based on keywords in Legislation Name
-  if (grepl("Act", legislation_name, ignore.case = TRUE)) {
+  # Determine Legislation Type with new rules
+  if (grepl("Order", legislation_name, ignore.case = TRUE)) {
+    legislation_type <- "Order"
+  } else if (grepl("Act", legislation_name, ignore.case = TRUE) && grepl("Regulations", legislation_name, ignore.case = TRUE)) {
+    legislation_type <- "Regulations"
+  } else if (grepl("Act", legislation_name, ignore.case = TRUE)) {
     legislation_type <- "Act"
   } else if (grepl("Regulation", legislation_name, ignore.case = TRUE)) {
     legislation_type <- "Regulations"
@@ -334,10 +355,10 @@ for (html_file_path in html_files) {
     legislation_type <- "Unknown Type"
   }
   
-  # Extract act name
+  # Extract act name or fallback to legislation name
   act_name <- html_file %>% html_node("section#statutesTab a") %>% html_text(trim = TRUE) %>% iconv(from = "UTF-8", to = "ASCII//TRANSLIT")
   act_name <- gsub(",.*$", "", act_name)  # Clean formatting
-  act_name <- ifelse(is.na(act_name) || act_name == "", "Unknown Act", act_name)
+  act_name <- ifelse(is.na(act_name) || act_name == "", legislation_name, act_name)  # Use legislation name if act name is missing
   
   # Extract paragraph nodes
   p_nodes <- html_file %>% html_nodes("p, li, div.paragWrapper")
@@ -351,43 +372,40 @@ for (html_file_path in html_files) {
   for (p in p_nodes) {
     paragraph_content <- p %>% html_text(trim = TRUE) %>% iconv(from = "UTF-8", to = "ASCII//TRANSLIT")
     
-    # First step: Include paragraphs containing keywords (either stand-alone words or exact phrases)
+    # Include paragraphs containing keywords (either stand-alone words or exact phrases)
     matches_keywords <- any(grepl(paste(standalone_keywords, collapse = "|"), paragraph_content, ignore.case = TRUE)) || 
       any(grepl(paste(phrase_keywords, collapse = "|"), paragraph_content, ignore.case = TRUE, fixed = TRUE))
     
     if (!matches_keywords) next
     
-    # Second step: Exclude paragraphs containing stand-alone exclusion words
+    # Exclude paragraphs containing stand-alone exclusion words
     if (any(grepl(paste(exclusion_words, collapse = "|"), paragraph_content, ignore.case = TRUE))) next
     
-    # Extract section number (removing subsection numbers)
+    # Extract section number
     secnum <- p %>% html_node("span.canlii_section") %>% html_text(trim = TRUE)
     if (is.na(secnum) || secnum == "") secnum <- p %>% html_node("a.sectionLabel span") %>% html_text(trim = TRUE)
     if (is.na(secnum) || secnum == "") secnum <- p %>% html_node("span.sectionLabel") %>% html_text(trim = TRUE)
-    
-    # Remove subsection numbers (keeps only the main section)
-    secnum <- gsub("\\..*$", "", secnum)
     
     # Preserve last known section number
     secnum <- ifelse(is.na(secnum) || secnum == "", last_secnum, secnum)
     last_secnum <- secnum  # Update last known section number
     
-    # Extract closest preceding heading
-    heading_tags <- c("h5", "h4", "h3", "h2", "h1")
-    heading <- ""
-    for (tag in heading_tags) {
-      heading <- p %>% html_node(xpath = paste0("preceding::", tag, "[1]")) %>% html_text(trim = TRUE) %>% iconv(from = "UTF-8", to = "ASCII//TRANSLIT")
-      if (!is.na(heading) && nzchar(heading)) break
+    # Extract closest preceding heading (including marginal notes)
+    heading <- p %>% html_node(xpath = "preceding::p[@class='MarginalNote'][1]") %>% html_text(trim = TRUE)
+    if (!is.na(heading) && nzchar(heading)) {
+      heading <- gsub("^Marginal note:\\s*", "", heading) # Remove "Marginal note:"
+    } else {
+      heading <- p %>% html_node(xpath = "preceding::h5[1] | preceding::h4[1] | preceding::h3[1] | preceding::h2[1] | preceding::h1[1]") %>% 
+        html_text(trim = TRUE) %>% iconv(from = "UTF-8", to = "ASCII//TRANSLIT")
     }
     
     # Append extracted data
     paragraphs <- c(paragraphs, paragraph_content)
     headings <- c(headings, heading)
     secnums <- c(secnums, secnum)
-    relevancy_types <- c(relevancy_types, "")  # Placeholder without population
+    relevancy_types <- c(relevancy_types, "")
   }
   
-  # Store extracted data
   if (length(paragraphs) > 0) {
     compiled_list[[legislation_name]] <- data.table(
       `Legislation Name` = legislation_name,
@@ -401,19 +419,13 @@ for (html_file_path in html_files) {
   }
 }
 
-# Combine all data into one table and remove duplicates per legislation and section
 compiled_df <- rbindlist(compiled_list, use.names = TRUE, fill = TRUE) %>%
   group_by(`Legislation Name`, `Section`) %>%
   distinct(Paragraph, .keep_all = TRUE) %>%
   ungroup()
 
-# Remove rows where paragraph contains "repealed" or "revoke"
-compiled_df <- compiled_df %>% filter(!grepl("repealed|revoke", Paragraph, ignore.case = TRUE))
-
-# Export data to CSV
 fwrite(compiled_df, output_csv_path, row.names = FALSE)
 
-# Print confirmation
 print(paste("CSV file saved to:", output_csv_path))
 
 #===========================================================

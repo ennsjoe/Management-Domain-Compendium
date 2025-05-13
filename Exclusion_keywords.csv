@@ -1,4 +1,4 @@
-﻿exclusion_word,action
+﻿Keyword,Action
 repealed,exclude
 revoked,exclude
 """Salmon Arm""",exclude
@@ -33,3 +33,14 @@ thence,exclude
 waterton,exclude
 liability,exclude
 """His Excellency""",exclude
+"""other than salmon""",exclude
+"""not salmon""",exclude
+"""fish for seals""",exclude
+"""seal fishing""",exclude
+"""rainbow trout""",exclude
+"""lake trout""",exclude
+seal,exclude
+trout,exclude
+sturgeon,exclude
+"""marine mammals""",exclude
+walrus,exclude

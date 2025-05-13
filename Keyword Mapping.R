@@ -10,7 +10,7 @@ setwd("C:/Users/ennsj/DFO-MPO/Salmon Science Strategy - working group - working 
 
 #=============================================
 # Step 1 - CanlII: Query - Type 1 Keywords: (salmon OR chinook OR sockeye OR coho OR chum)
-#Download HTML files of Acts/Regs to a folder - call these Type 1 Legislation
+# Download HTML files of Acts/Regs to a folder - call these Type 1 Legislation
 #==============================================
 
 #=============================================
